@@ -8,12 +8,11 @@ import urllib.request
 import zipfile
 from datetime import datetime, timezone
 import string
-import signal
-import sys
-import ctypes
-import time
 import socket 
 import struct 
+import time
+import sys
+import ctypes
 
 def resource_path(relative_path):
     try:
@@ -50,6 +49,14 @@ class SoulmaskManagerApp(ctk.CTk):
         self.active_players = []
         self.timer_id = None
         
+        self.map_names_de = ["Regenwald (Level01_Main)", "Wüste (DLC_Level01_Main)"]
+        self.map_names_en = ["Cloud Mist Forest (Level01_Main)", "Shifting Sands (DLC_Level01_Main)"]
+        self.map_values = ["Level01_Main", "DLC_Level01_Main"]
+        
+        self.survival_diffs = [
+            {"name_de": "Normal", "name_en": "Normal", "desc_de": "Die standardmäßige, vom Entwickler gedachte Überlebens-Herausforderung.", "desc_en": "The standard survival challenge intended by the developers."}
+        ]
+        
         self.settings = {
             "Language": "English",
             "ServerName": "My Soulmask Server",
@@ -63,7 +70,10 @@ class SoulmaskManagerApp(ctk.CTk):
             "PublicIP": "",
             "GamePort": "8777",
             "QueryPort": "27015",
-            "EchoPort": "18888"
+            "EchoPort": "18888",
+            "MapName": "Level01_Main",
+            "CombatMode": "PvE",
+            "Difficulty": "Normal"
         }
         
         self.load_settings()
@@ -72,6 +82,31 @@ class SoulmaskManagerApp(ctk.CTk):
         self.is_initializing = False
         
         self.log("System", "Manager gestartet. Bereit für den Einsatz!", "System", "Manager started. Ready for deployment!")
+
+    def get_map_display_name(self, map_val, de):
+        try:
+            idx = self.map_values.index(map_val)
+        except ValueError:
+            idx = 0
+        return self.map_names_de[idx] if de else self.map_names_en[idx]
+
+    def get_map_val_from_display(self, display_name):
+        if display_name in self.map_names_de:
+            return self.map_values[self.map_names_de.index(display_name)]
+        if display_name in self.map_names_en:
+            return self.map_values[self.map_names_en.index(display_name)]
+        return "Level01_Main"
+
+    def on_map_changed(self, *args):
+        if self.is_initializing: return
+        val = self.get_map_val_from_display(self.var_map_display.get())
+        self.settings["MapName"] = val
+        self.save_settings()
+
+    def on_diff_changed(self, *args):
+        if self.is_initializing: return
+        self.update_main_diff_options(update_diff_box=False)
+        self.save_settings()
 
     def setup_ui(self):
         self.tabview = ctk.CTkTabview(self)
@@ -154,6 +189,46 @@ class SoulmaskManagerApp(ctk.CTk):
         self.var_maxplayers = ctk.StringVar(value=self.settings["MaxPlayers"])
         self.lbl_mp = self.create_entry_row(self.scroll_set, "Max. Spieler:", self.var_maxplayers, width=80)
 
+        self.lbl_game_t = self.create_label(self.scroll_set, "Spiel & Welt / Game & World", True)
+        
+        f_map = ctk.CTkFrame(self.scroll_set, fg_color="transparent")
+        f_map.pack(fill='x', pady=2)
+        self.lbl_s_map = ctk.CTkLabel(f_map, text="Map:", width=200, anchor='w')
+        self.lbl_s_map.pack(side='left', padx=10)
+        
+        de = self.var_lang.get() == "Deutsch"
+        current_map = self.settings.get("MapName", "Level01_Main")
+        self.var_map_display = ctk.StringVar(value=self.get_map_display_name(current_map, de))
+        self.cb_map = ctk.CTkComboBox(f_map, variable=self.var_map_display, values=self.map_names_de if de else self.map_names_en, width=250)
+        self.cb_map.pack(side='left')
+
+        f_combat = ctk.CTkFrame(self.scroll_set, fg_color="transparent")
+        f_combat.pack(fill='x', pady=2)
+        self.lbl_s_combat = ctk.CTkLabel(f_combat, text="Combat Mode:", width=200, anchor='w')
+        self.lbl_s_combat.pack(side='left', padx=10)
+        self.var_combat = ctk.StringVar(value=self.settings.get("CombatMode", "PvE"))
+        ctk.CTkComboBox(f_combat, variable=self.var_combat, values=["PvE", "PvP"], width=250).pack(side='left')
+        
+        self.lbl_s_gmode = ctk.CTkLabel(self.scroll_set, text="Game Mode: Survival Mode (Coming soon)", font=("Arial", 13, "bold"), text_color="#AAAAAA", justify="left")
+        self.lbl_s_gmode.pack(anchor='w', padx=10, pady=(5, 0))
+
+        f_diff = ctk.CTkFrame(self.scroll_set, fg_color="transparent")
+        f_diff.pack(fill='x', pady=2)
+        self.lbl_s_diff = ctk.CTkLabel(f_diff, text="Difficulty (Coming soon):", width=200, anchor='w')
+        self.lbl_s_diff.pack(side='left', padx=10)
+        self.var_diff = ctk.StringVar(value=self.settings.get("Difficulty", "Normal"))
+        self.cb_diff = ctk.CTkComboBox(f_diff, variable=self.var_diff, values=[], width=250, state="disabled")
+        self.cb_diff.pack(side='left')
+        
+        self.lbl_set_diff_desc = ctk.CTkLabel(self.scroll_set, text="", font=("Arial", 12, "italic"), text_color="#00E676", justify="left", wraplength=500)
+        self.lbl_set_diff_desc.pack(anchor='w', padx=220, pady=(0, 10))
+
+        self.var_map_display.trace_add("write", self.on_map_changed)
+        self.var_diff.trace_add("write", self.on_diff_changed)
+        self.var_combat.trace_add("write", lambda *args: self.save_settings())
+        
+        self.update_main_diff_options()
+
         self.lbl_path_t = self.create_label(self.scroll_set, "Pfade / Paths", True)
         self.btn_auto_path = ctk.CTkButton(self.scroll_set, text="🪄 Pfade überall suchen", fg_color="#00695C", command=self.auto_detect_paths)
         self.btn_auto_path.pack(anchor='w', padx=10, pady=5)
@@ -189,6 +264,35 @@ class SoulmaskManagerApp(ctk.CTk):
 
         for v in [self.var_servername, self.var_password, self.var_adminpassword, self.var_maxplayers, self.var_steamcmd, self.var_install, self.var_exe, self.var_worlddb, self.var_gameport, self.var_queryport, self.var_publicip]:
             v.trace_add("write", lambda *args: self.save_settings())
+
+    def update_main_diff_options(self, update_diff_box=True):
+        de = self.var_lang.get() == "Deutsch"
+        
+        diffs = [d["name_de"] if de else d["name_en"] for d in self.survival_diffs]
+        
+        if update_diff_box:
+            self.cb_diff.configure(values=diffs)
+            
+        current_val = self.var_diff.get()
+        if current_val not in diffs:
+            idx = 0
+            for i, d in enumerate(self.survival_diffs):
+                if d["name_de"] == current_val or d["name_en"] == current_val:
+                    idx = i
+                    break
+            new_val = self.survival_diffs[idx]["name_de"] if de else self.survival_diffs[idx]["name_en"]
+            self.var_diff.set(new_val)
+            current_val = new_val
+            
+        if hasattr(self, 'lbl_set_diff_desc') and self.lbl_set_diff_desc.winfo_exists():
+            for d in self.survival_diffs:
+                sub_name = d["name_de"] if de else d["name_en"]
+                if sub_name == current_val:
+                    desc = d["desc_de"] if de else d["desc_en"]
+                    self.lbl_set_diff_desc.configure(text=desc)
+                    break
+                    
+        self.save_settings()
 
     def setup_rules(self):
         f = ctk.CTkFrame(self.tab_rules, fg_color="transparent"); f.pack(fill='x', pady=5)
@@ -252,30 +356,40 @@ class SoulmaskManagerApp(ctk.CTk):
         if not os.path.exists(exe): 
             messagebox.showerror("Fehler" if de else "Error", "WSServer-Win64-Shipping.exe Pfad ungültig!" if de else "WSServer-Win64-Shipping.exe path invalid!")
             return
+            
+        map_name = self.settings.get("MapName", "Level01_Main")
+        combat_mode = self.settings.get("CombatMode", "PvE").lower()
         
-        args = [
-            exe, "Level01_Main", "-server",
-            f"-Port={self.var_gameport.get()}",
-            f"-QueryPort={self.var_queryport.get()}",
-            f"-EchoPort={self.settings.get('EchoPort', '18888')}",
-            f"-ServerName={self.var_servername.get()}",
-            f"-MaxPlayers={self.var_maxplayers.get()}",
-            "-MULTIHOME=0.0.0.0",
-            "-forcepassthrough",
-            "-UTF8Output"
-        ]
+        # WICHTIG: -GameMode und -Difficulty wurden absichtlich entfernt.
+        # Diese inoffiziellen Command-Line-Parameter zwingen die Unreal Engine in einen Fehlerzustand,
+        # wodurch Dungeons nicht geladen werden können und der Server einfriert!
+        cmd_string = (
+            f'"{exe}" {map_name} -server '
+            f'-Port={self.var_gameport.get()} '
+            f'-QueryPort={self.var_queryport.get()} '
+            f'-EchoPort={self.settings.get("EchoPort", "18888")} '
+            f'-SteamServerName="{self.var_servername.get()}" '
+            f'-MaxPlayers={self.var_maxplayers.get()} '
+            f'-MULTIHOME=0.0.0.0 '
+            f'-forcepassthrough '
+            f'-{combat_mode} '
+            f'-UTF8Output'
+        )
         
-        if self.var_password.get().strip():
-            args.append(f"-ServerPassword={self.var_password.get()}")
-        if self.var_adminpassword.get().strip():
-            args.append(f"-ServerAdminPassword={self.var_adminpassword.get()}")
+        pw = self.var_password.get().strip()
+        if pw:
+            cmd_string += f' -PSW="{pw}" -ServerPassword="{pw}"'
+            
+        admin_pw = self.var_adminpassword.get().strip()
+        if admin_pw:
+            cmd_string += f' -adminpsw="{admin_pw}" -ServerAdminPassword="{admin_pw}"'
 
         try:
             working_dir = os.path.dirname(exe)
             creation_flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
             
             self.server_process = subprocess.Popen(
-                args, 
+                cmd_string, 
                 cwd=working_dir,
                 stdout=subprocess.PIPE, 
                 stderr=subprocess.STDOUT, 
@@ -660,9 +774,105 @@ class SoulmaskManagerApp(ctk.CTk):
             
         self.var_install.set(target_dir)
         self.save_settings()
+        
+        self._open_install_wizard(cmd, target_dir)
 
-        self.log("System", f"Starte Server Install/Update in {target_dir} via SteamCMD...", "System", f"Starting Server Install/Update in {target_dir} via SteamCMD...")
-        subprocess.Popen([cmd, "+force_install_dir", target_dir, "+login", "anonymous", "+app_update", "3017310", "validate", "+quit"], creationflags=subprocess.CREATE_NEW_CONSOLE)
+    def _open_install_wizard(self, cmd, target_dir):
+        de = self.var_lang.get() == "Deutsch"
+        
+        wizard = ctk.CTkToplevel(self)
+        wizard.title("Server Setup" if de else "Server Setup")
+        wizard.geometry("750x550")
+        wizard.transient(self)
+        wizard.grab_set()
+        
+        ctk.CTkLabel(wizard, text="Soulmask Server Setup", font=("Arial", 18, "bold")).pack(pady=(20, 10))
+        
+        f_map = ctk.CTkFrame(wizard, fg_color="transparent")
+        f_map.pack(fill='x', padx=40, pady=5)
+        ctk.CTkLabel(f_map, text="Map / Welt:" if de else "Map:", width=150, anchor='w').pack(side='left')
+        
+        current_map = self.settings.get("MapName", "Level01_Main")
+        display_map = self.get_map_display_name(current_map, de)
+        map_list = self.map_names_de if de else self.map_names_en
+        
+        var_map_wizard = ctk.StringVar(value=display_map)
+        ctk.CTkComboBox(f_map, variable=var_map_wizard, values=map_list).pack(side='left', fill='x', expand=True)
+
+        f_combat = ctk.CTkFrame(wizard, fg_color="transparent")
+        f_combat.pack(fill='x', padx=40, pady=5)
+        ctk.CTkLabel(f_combat, text="Kampfmodus:" if de else "Combat Mode:", width=150, anchor='w').pack(side='left')
+        var_combat_wizard = ctk.StringVar(value=self.settings.get("CombatMode", "PvE"))
+        ctk.CTkComboBox(f_combat, variable=var_combat_wizard, values=["PvE", "PvP"]).pack(side='left', fill='x', expand=True)
+        
+        lbl_mode_desc = ctk.CTkLabel(wizard, text="Das klassische Soulmask-Überlebenserlebnis. Ressourcenmanagement und Planung sind essenziell." if de else "The classic Soulmask survival experience. Resource management and planning are essential.", font=("Arial", 12, "italic"), text_color="#AAAAAA", wraplength=600, justify="center")
+        lbl_mode_desc.pack(padx=40, pady=(10, 10))
+        
+        f_diff_container = ctk.CTkFrame(wizard)
+        f_diff_container.pack(fill='x', padx=40, pady=10)
+        ctk.CTkLabel(f_diff_container, text="Schwierigkeit (Coming soon):" if de else "Difficulty (Coming soon):", font=("Arial", 14, "bold")).pack(pady=5)
+        
+        f_diff_radios_1 = ctk.CTkFrame(f_diff_container, fg_color="transparent")
+        f_diff_radios_1.pack(pady=2)
+        f_diff_radios_2 = ctk.CTkFrame(f_diff_container, fg_color="transparent")
+        f_diff_radios_2.pack(pady=2)
+        
+        lbl_diff_desc = ctk.CTkLabel(f_diff_container, text="", font=("Arial", 13), text_color="#00E676", wraplength=600, justify="center", height=60)
+        lbl_diff_desc.pack(pady=10)
+        
+        var_diff_wizard = ctk.StringVar(value=self.var_diff.get())
+        
+        def update_difficulties():
+            current_diff_names = [d["name_de"] if de else d["name_en"] for d in self.survival_diffs]
+            if var_diff_wizard.get() not in current_diff_names:
+                var_diff_wizard.set(current_diff_names[0])
+            
+            for i, d in enumerate(self.survival_diffs):
+                name = d["name_de"] if de else d["name_en"]
+                desc_de = d["desc_de"]
+                desc_en = d["desc_en"]
+                
+                parent = f_diff_radios_1 if i < 3 else f_diff_radios_2
+                rb = ctk.CTkRadioButton(parent, text=name, variable=var_diff_wizard, value=name, state="disabled")
+                rb.pack(side='left', padx=10, pady=5)
+                
+                def make_on_enter(text_de, text_en):
+                    return lambda e, t_de=text_de, t_en=text_en: lbl_diff_desc.configure(text=t_de if self.var_lang.get() == "Deutsch" else t_en)
+                    
+                def on_leave(e):
+                    current_val = var_diff_wizard.get()
+                    for d_sub in self.survival_diffs:
+                        sub_name = d_sub["name_de"] if self.var_lang.get() == "Deutsch" else d_sub["name_en"]
+                        if sub_name == current_val:
+                            lbl_diff_desc.configure(text=d_sub["desc_de"] if self.var_lang.get() == "Deutsch" else d_sub["desc_en"])
+                            break
+                            
+                rb.bind("<Enter>", make_on_enter(desc_de, desc_en))
+                rb.bind("<Leave>", on_leave)
+                
+            on_leave(None)
+
+        update_difficulties() 
+        
+        def finish_setup():
+            self.settings["MapName"] = self.get_map_val_from_display(var_map_wizard.get())
+            self.var_map_display.set(var_map_wizard.get())
+            
+            self.settings["CombatMode"] = var_combat_wizard.get()
+            self.var_combat.set(var_combat_wizard.get())
+            
+            self.settings["Difficulty"] = var_diff_wizard.get()
+            self.var_diff.set(var_diff_wizard.get())
+            
+            self.save_settings()
+            self.update_main_diff_options()
+            
+            wizard.destroy()
+            
+            self.log("System", f"Starte Server Install in {target_dir} via SteamCMD...", "System", f"Starting Server Install in {target_dir} via SteamCMD...")
+            subprocess.Popen([cmd, "+force_install_dir", target_dir, "+login", "anonymous", "+app_update", "3017310", "validate", "+quit"], creationflags=subprocess.CREATE_NEW_CONSOLE)
+            
+        ctk.CTkButton(wizard, text="Installieren & Herunterladen" if de else "Install & Download", fg_color="#2E7D32", hover_color="#1B5E20", command=finish_setup).pack(pady=20)
 
     def update_server(self):
         de = self.var_lang.get() == "Deutsch"
@@ -820,6 +1030,13 @@ class SoulmaskManagerApp(ctk.CTk):
         self.lbl_pw.configure(text="Passwort:" if de else "Password:")
         self.lbl_apw.configure(text="Admin PW:")
         self.lbl_mp.configure(text="Max. Spieler:" if de else "Max. Players:")
+        
+        self.lbl_game_t.configure(text="Spiel & Welt / Game & World")
+        self.lbl_s_map.configure(text="Map / Welt:" if de else "Map:")
+        self.lbl_s_combat.configure(text="Kampfmodus:" if de else "Combat Mode:")
+        self.lbl_s_diff.configure(text="Schwierigkeit (Coming soon):" if de else "Difficulty (Coming soon):")
+        self.lbl_s_gmode.configure(text="Spielmodus: Survival Mode (Coming soon)" if de else "Game Mode: Survival Mode (Coming soon)")
+
         self.lbl_path_t.configure(text="Pfade" if de else "Paths")
         self.btn_auto_path.configure(text="🪄 Pfade überall suchen" if de else "🪄 Deep Auto-Detect")
         self.lbl_net_t.configure(text="Netzwerk & Ports" if de else "Network & Ports")
@@ -833,6 +1050,14 @@ class SoulmaskManagerApp(ctk.CTk):
         self.btn_r_auto.configure(text="🔍 Automatisch" if de else "🔍 Auto-Find")
         self.btn_r_man.configure(text="📂 Laden" if de else "📂 Load JSON")
         self.btn_r_save.configure(text="💾 Speichern" if de else "💾 Save Rules")
+        
+        current_map_val = self.settings.get("MapName", "Level01_Main")
+        map_list = self.map_names_de if de else self.map_names_en
+        if hasattr(self, 'cb_map'):
+            self.cb_map.configure(values=map_list)
+            self.var_map_display.set(self.get_map_display_name(current_map_val, de))
+            
+        self.update_main_diff_options(update_diff_box=True)
 
     def load_settings(self):
         if os.path.exists(self.config_file):
@@ -848,7 +1073,10 @@ class SoulmaskManagerApp(ctk.CTk):
             "MaxPlayers": self.var_maxplayers.get(), "ExePath": self.var_exe.get(), 
             "InstallDir": self.var_install.get(), "WorldDbPath": self.var_worlddb.get(),
             "GamePort": self.var_gameport.get(), "QueryPort": self.var_queryport.get(), 
-            "PublicIP": self.var_publicip.get(), "SteamCmdPath": self.var_steamcmd.get()
+            "PublicIP": self.var_publicip.get(), "SteamCmdPath": self.var_steamcmd.get(),
+            "MapName": self.get_map_val_from_display(self.var_map_display.get()),
+            "CombatMode": self.var_combat.get(),
+            "Difficulty": self.var_diff.get()
         })
         try:
             with open(self.config_file, 'w') as f: json.dump(self.settings, f, indent=4)
