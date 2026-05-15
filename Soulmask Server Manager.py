@@ -65,6 +65,7 @@ class SoulmaskManagerApp(ctk.CTk):
             "ServerPassword": "",
             "AdminPassword": "admin",
             "MaxPlayers": "70",
+            "BackupIntervalMinutes": "120",
             "ExePath": "",
             "SteamCmdPath": "",
             "InstallDir": "",
@@ -193,6 +194,9 @@ class SoulmaskManagerApp(ctk.CTk):
         
         self.var_maxplayers = ctk.StringVar(value=self.settings["MaxPlayers"])
         self.lbl_mp = self.create_entry_row(self.scroll_set, "Max. Spieler:", self.var_maxplayers, width=80)
+        
+        self.var_backup_interval = ctk.StringVar(value=self.settings.get("BackupIntervalMinutes", "120"))
+        self.lbl_backup = self.create_entry_row(self.scroll_set, "Backup Timer (Min):", self.var_backup_interval, width=80)
 
         self.lbl_game_t = self.create_label(self.scroll_set, "Spiel & Welt / Game & World", True)
         
@@ -263,11 +267,13 @@ class SoulmaskManagerApp(ctk.CTk):
         self.lbl_gp = self.create_entry_row(self.scroll_set, "Game Port:", self.var_gameport, width=100)
         self.var_queryport = ctk.StringVar(value=self.settings["QueryPort"])
         self.lbl_qp = self.create_entry_row(self.scroll_set, "Query Port:", self.var_queryport, width=100)
+        self.var_echoport = ctk.StringVar(value=self.settings.get("EchoPort", "18888"))
+        self.lbl_ep = self.create_entry_row(self.scroll_set, "Echo Port:", self.var_echoport, width=100)
 
         self.lbl_port_hint = ctk.CTkLabel(self.scroll_set, text="", text_color="#FFA000", justify="left")
         self.lbl_port_hint.pack(anchor='w', padx=10, pady=(5, 10))
 
-        for v in [self.var_servername, self.var_password, self.var_adminpassword, self.var_maxplayers, self.var_steamcmd, self.var_install, self.var_exe, self.var_worlddb, self.var_gameport, self.var_queryport, self.var_publicip]:
+        for v in [self.var_servername, self.var_password, self.var_adminpassword, self.var_maxplayers, self.var_steamcmd, self.var_install, self.var_exe, self.var_worlddb, self.var_gameport, self.var_queryport, self.var_echoport, self.var_publicip, self.var_backup_interval]:
             v.trace_add("write", lambda *args: self.save_settings())
 
     def update_main_diff_options(self, update_diff_box=True):
@@ -365,12 +371,18 @@ class SoulmaskManagerApp(ctk.CTk):
         map_name = self.settings.get("MapName", "Level01_Main")
         combat_mode = self.settings.get("CombatMode", "PvE").lower()
         
+        raw_name = self.var_servername.get().strip()
+        if not raw_name.endswith("[RM]") and not raw_name.endswith(" RM"):
+            final_server_name = f"{raw_name} [RM]"
+        else:
+            final_server_name = raw_name
+        
         cmd_string = (
             f'"{exe}" {map_name} -server '
             f'-Port={self.var_gameport.get()} '
             f'-QueryPort={self.var_queryport.get()} '
             f'-EchoPort={self.settings.get("EchoPort", "18888")} '
-            f'-SteamServerName="{self.var_servername.get()}" '
+            f'-SteamServerName="{final_server_name}" '
             f'-MaxPlayers={self.var_maxplayers.get()} '
             f'-MULTIHOME=0.0.0.0 '
             f'-forcepassthrough '
@@ -417,7 +429,21 @@ class SoulmaskManagerApp(ctk.CTk):
 
     def _backup_task(self):
         while self.server_process and self.server_process.poll() is None:
-            for _ in range(7200):
+            try:
+                interval_minutes = int(self.var_backup_interval.get())
+            except ValueError:
+                interval_minutes = 120
+                
+            if interval_minutes <= 0:
+                for _ in range(60):
+                    if not self.server_process or self.server_process.poll() is not None:
+                        return
+                    time.sleep(1)
+                continue
+                
+            interval_seconds = interval_minutes * 60
+            
+            for _ in range(interval_seconds):
                 if not self.server_process or self.server_process.poll() is not None:
                     return
                 time.sleep(1)
@@ -1114,6 +1140,8 @@ class SoulmaskManagerApp(ctk.CTk):
         self.lbl_pw.configure(text="Passwort:" if de else "Password:")
         self.lbl_apw.configure(text="Admin PW:")
         self.lbl_mp.configure(text="Max. Spieler:" if de else "Max. Players:")
+        if hasattr(self, 'lbl_backup'):
+            self.lbl_backup.configure(text="Backup Timer (Min):" if de else "Backup Timer (Min):")
         
         self.lbl_game_t.configure(text="Spiel & Welt / Game & World")
         self.lbl_s_map.configure(text="Map / Welt:" if de else "Map:")
@@ -1157,10 +1185,12 @@ class SoulmaskManagerApp(ctk.CTk):
             "MaxPlayers": self.var_maxplayers.get(), "ExePath": self.var_exe.get(), 
             "InstallDir": self.var_install.get(), "WorldDbPath": self.var_worlddb.get(),
             "GamePort": self.var_gameport.get(), "QueryPort": self.var_queryport.get(), 
+            "EchoPort": self.var_echoport.get(),
             "PublicIP": self.var_publicip.get(), "SteamCmdPath": self.var_steamcmd.get(),
             "MapName": self.get_map_val_from_display(self.var_map_display.get()),
             "CombatMode": self.var_combat.get(),
-            "Difficulty": self.var_diff.get()
+            "Difficulty": self.var_diff.get(),
+            "BackupIntervalMinutes": self.var_backup_interval.get()
         })
         try:
             with open(self.config_file, 'w') as f: json.dump(self.settings, f, indent=4)
