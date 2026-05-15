@@ -13,6 +13,7 @@ import struct
 import time
 import sys
 import ctypes
+import shutil
 
 def resource_path(relative_path):
     try:
@@ -44,6 +45,7 @@ class SoulmaskManagerApp(ctk.CTk):
         self.server_process = None
         self.is_initializing = True
         self.current_rules_path = ""
+        self.pending_restart = False
         
         self.tracked_players = [] 
         self.active_players = []
@@ -128,6 +130,9 @@ class SoulmaskManagerApp(ctk.CTk):
         
         self.btn_start = ctk.CTkButton(btn_frame, text="▶ Start", fg_color="#2E7D32", hover_color="#1B5E20", width=100, command=self.start_server)
         self.btn_start.pack(side='left', padx=5)
+        
+        self.btn_restart = ctk.CTkButton(btn_frame, text="🔄 Neustart", fg_color="#F57C00", hover_color="#E65100", width=100, state='disabled', command=self.restart_server)
+        self.btn_restart.pack(side='left', padx=5)
         
         self.btn_stop = ctk.CTkButton(btn_frame, text="⏹ Stopp", fg_color="#C62828", hover_color="#b71c1c", width=100, state='disabled', command=self.stop_server)
         self.btn_stop.pack(side='left', padx=5)
@@ -360,9 +365,6 @@ class SoulmaskManagerApp(ctk.CTk):
         map_name = self.settings.get("MapName", "Level01_Main")
         combat_mode = self.settings.get("CombatMode", "PvE").lower()
         
-        # WICHTIG: -GameMode und -Difficulty wurden absichtlich entfernt.
-        # Diese inoffiziellen Command-Line-Parameter zwingen die Unreal Engine in einen Fehlerzustand,
-        # wodurch Dungeons nicht geladen werden können und der Server einfriert!
         cmd_string = (
             f'"{exe}" {map_name} -server '
             f'-Port={self.var_gameport.get()} '
@@ -401,14 +403,73 @@ class SoulmaskManagerApp(ctk.CTk):
             
             self.lbl_status.configure(text="Startet..." if de else "Starting...", text_color="#FFA726")
             self.btn_start.configure(state='disabled')
+            self.btn_restart.configure(state='normal')
             self.btn_stop.configure(state='normal')
             self.log("System", "Server-Prozess gestartet! Warte darauf, dass die Welt geladen wird...", "System", "Server process started! Waiting for the world to load...")
             
             threading.Thread(target=self._read_console_output, daemon=True).start()
             threading.Thread(target=self._check_server_ready, daemon=True).start()
+            
+            threading.Thread(target=self._backup_task, daemon=True).start()
                 
         except Exception as e: 
             self.log("Fehler", str(e), "Error", str(e))
+
+    def _backup_task(self):
+        while self.server_process and self.server_process.poll() is None:
+            for _ in range(7200):
+                if not self.server_process or self.server_process.poll() is not None:
+                    return
+                time.sleep(1)
+            
+            if self.server_process and self.server_process.poll() is None:
+                self._trigger_save_and_backup()
+
+    def _trigger_save_and_backup(self):
+        de = self.var_lang.get() == "Deutsch"
+        self.after(0, lambda: self.log("Backup", "Starte automatisches Backup...", "Backup", "Starting automatic backup..."))
+        
+        try:
+            try: echo_port = int(self.settings.get('EchoPort', '18888'))
+            except: echo_port = 18888
+
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(3.0)
+            sock.connect(("127.0.0.1", echo_port))
+            sock.sendall(b"saveworld 1\r\n")
+            sock.close()
+        except Exception:
+            if self.server_process and self.server_process.poll() is None:
+                try:
+                    self.server_process.stdin.write("saveworld 1\r\n")
+                    self.server_process.stdin.flush()
+                except:
+                    pass
+        
+        time.sleep(10)
+        
+        db_path = self.var_worlddb.get()
+        if db_path and os.path.exists(db_path):
+            backup_path = db_path + ".backup"
+            try:
+                shutil.copy2(db_path, backup_path)
+                self.after(0, lambda: self.log("Backup", "Backup erfolgreich erstellt (Altes überschrieben).", "Backup", "Backup successfully created (Old one overwritten)."))
+            except Exception as e:
+                self.after(0, lambda: self.log("Fehler", f"Backup fehlgeschlagen: {e}", "Error", f"Backup failed: {e}"))
+        else:
+            self.after(0, lambda: self.log("Backup", "world.db nicht gefunden! Bitte Pfad in den Einstellungen prüfen.", "Backup", "world.db not found! Please check path in settings."))
+
+    def restart_server(self):
+        de = self.var_lang.get() == "Deutsch"
+        if not self.server_process: 
+            return
+            
+        self.btn_restart.configure(state='disabled')
+        self.btn_stop.configure(state='disabled')
+        
+        self.log("System", "Neustart eingeleitet...", "System", "Restart initiated...")
+        self.pending_restart = True
+        self.stop_server()
 
     def _check_server_ready(self):
         ip = "127.0.0.1"
@@ -444,6 +505,7 @@ class SoulmaskManagerApp(ctk.CTk):
             return
 
         self.btn_stop.configure(state='disabled')
+        self.btn_restart.configure(state='disabled')
         
         de = self.var_lang.get() == "Deutsch"
         self.lbl_status.configure(text="Speichert..." if de else "Saving...", text_color="#FFA726")
@@ -502,6 +564,7 @@ class SoulmaskManagerApp(ctk.CTk):
         
         de = self.var_lang.get() == "Deutsch"
         self.btn_stop.configure(text="⏹ Stopp" if de else "⏹ Stop")
+        self.btn_restart.configure(text="🔄 Neustart" if de else "🔄 Restart")
         
         self.tracked_players = [] 
         
@@ -510,6 +573,11 @@ class SoulmaskManagerApp(ctk.CTk):
             self.timer_id = None
             
         self.log("System", "Server erfolgreich gestoppt & Welt gespeichert!", "System", "Server successfully stopped & world saved!")
+
+        if getattr(self, 'pending_restart', False):
+            self.pending_restart = False
+            self.log("System", "Starte Server in 3 Sekunden neu...", "System", "Restarting server in 3 seconds...")
+            self.after(3000, self.start_server)
 
     def _read_console_output(self):
         if not self.server_process or not self.server_process.stdout:
@@ -782,7 +850,7 @@ class SoulmaskManagerApp(ctk.CTk):
         
         wizard = ctk.CTkToplevel(self)
         wizard.title("Server Setup" if de else "Server Setup")
-        wizard.geometry("750x550")
+        wizard.geometry("750x650")
         wizard.transient(self)
         wizard.grab_set()
         
@@ -872,7 +940,18 @@ class SoulmaskManagerApp(ctk.CTk):
             self.log("System", f"Starte Server Install in {target_dir} via SteamCMD...", "System", f"Starting Server Install in {target_dir} via SteamCMD...")
             subprocess.Popen([cmd, "+force_install_dir", target_dir, "+login", "anonymous", "+app_update", "3017310", "validate", "+quit"], creationflags=subprocess.CREATE_NEW_CONSOLE)
             
-        ctk.CTkButton(wizard, text="Installieren & Herunterladen" if de else "Install & Download", fg_color="#2E7D32", hover_color="#1B5E20", command=finish_setup).pack(pady=20)
+        btn_frame = ctk.CTkFrame(wizard, fg_color="transparent")
+        btn_frame.pack(side="bottom", pady=30) 
+        
+        btn_cancel = ctk.CTkButton(btn_frame, text="Abbrechen" if de else "Cancel", 
+                                   fg_color="#C62828", hover_color="#b71c1c", 
+                                   command=wizard.destroy)
+        btn_cancel.pack(side='left', padx=10)
+        
+        btn_install = ctk.CTkButton(btn_frame, text="Installieren" if de else "Install", 
+                                    fg_color="#2E7D32", hover_color="#1B5E20", 
+                                    command=finish_setup)
+        btn_install.pack(side='left', padx=10)
 
     def update_server(self):
         de = self.var_lang.get() == "Deutsch"
@@ -1012,8 +1091,13 @@ class SoulmaskManagerApp(ctk.CTk):
         elif current_status in ["Speichert...", "Saving..."]:
             self.lbl_status.configure(text="Speichert..." if de else "Saving...")
         
-        if self.server_process: self.btn_stop.configure(text="⏹ Stoppt..." if de else "⏹ Stopping...")
-        else: self.btn_stop.configure(text="⏹ Stopp" if de else "⏹ Stop")
+        if self.server_process: 
+            self.btn_stop.configure(text="⏹ Stoppt..." if de else "⏹ Stopping...")
+            self.btn_restart.configure(text="🔄 Neustartet..." if de else "🔄 Restarting...")
+        else: 
+            self.btn_stop.configure(text="⏹ Stopp" if de else "⏹ Stop")
+            self.btn_restart.configure(text="🔄 Neustart" if de else "🔄 Restart")
+            
         self.btn_inst_srv.configure(text="⏬ Server Install" if de else "⏬ Install Server")
         self.btn_update_srv.configure(text="🔄 Server Update" if de else "🔄 Update Server")
         
