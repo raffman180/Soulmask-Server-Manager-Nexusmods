@@ -43,6 +43,7 @@ class SoulmaskManagerApp(ctk.CTk):
         
         self.config_file = "manager_config.json"
         self.server_process = None
+        self.server_process_dlc = None
         self.is_initializing = True
         self.current_rules_path = ""
         self.pending_restart = False
@@ -76,7 +77,17 @@ class SoulmaskManagerApp(ctk.CTk):
             "EchoPort": "18888",
             "MapName": "Level01_Main",
             "CombatMode": "PvE",
-            "Difficulty": "Normal"
+            "Difficulty": "Normal",
+            "ClusterEnabled": False,
+            "ClusterServerName": "My Soulmask DLC Server",
+            "ClusterServerPassword": "",
+            "ClusterAdminPassword": "admin",
+            "ClusterMaxPlayers": "70",
+            "ClusterGamePort": "8778",
+            "ClusterQueryPort": "27016",
+            "ClusterEchoPort": "18889",
+            "ClusterBackupIntervalMinutes": "120",
+            "MainServerPort": "8781"
         }
         
         self.load_settings()
@@ -119,11 +130,15 @@ class SoulmaskManagerApp(ctk.CTk):
         self.tab_players = self.tabview.add("👥 Players | Spieler")
         self.tab_set = self.tabview.add("⚙️ Settings | Einstellungen")
         self.tab_rules = self.tabview.add("📜 Rules | Regeln")
+        self.tab_cluster = self.tabview.add("🔗 Cluster")
+        self.tab_info = self.tabview.add("ℹ️ Info | Hilfe")
         
         self.setup_dashboard()
         self.setup_players()
         self.setup_settings()
         self.setup_rules()
+        self.setup_cluster()
+        self.setup_info()
 
     def setup_dashboard(self):
         btn_frame = ctk.CTkFrame(self.tab_dash, fg_color="transparent")
@@ -316,6 +331,617 @@ class SoulmaskManagerApp(ctk.CTk):
         self.rules_editor = ctk.CTkTextbox(self.tab_rules, fg_color="#1E1E1E", text_color="#E6E2AA", font=("Consolas", 13))
         self.rules_editor.pack(expand=True, fill='both', pady=10)
 
+    def setup_cluster(self):
+        self.scroll_cluster = ctk.CTkScrollableFrame(self.tab_cluster, fg_color="transparent")
+        self.scroll_cluster.pack(expand=True, fill='both')
+
+        # Enable toggle
+        f_enable = ctk.CTkFrame(self.scroll_cluster, fg_color="transparent")
+        f_enable.pack(fill='x', pady=10)
+        self.var_cluster_enabled = ctk.BooleanVar(value=self.settings.get("ClusterEnabled", False))
+        self.chk_cluster = ctk.CTkCheckBox(f_enable, text="Cluster Modus aktivieren", variable=self.var_cluster_enabled, command=self._on_cluster_toggle)
+        self.chk_cluster.pack(side='left', padx=10)
+        
+        self.lbl_cluster_info = ctk.CTkLabel(f_enable, text="", text_color="#FFA000", font=("Arial", 12))
+        self.lbl_cluster_info.pack(side='left', padx=10)
+
+        # Cluster status + buttons
+        f_cluster_btns = ctk.CTkFrame(self.scroll_cluster, fg_color="transparent")
+        f_cluster_btns.pack(fill='x', pady=5)
+        
+        self.btn_cluster_start = ctk.CTkButton(f_cluster_btns, text="▶ Cluster Start", fg_color="#2E7D32", hover_color="#1B5E20", width=130, command=self.cluster_start)
+        self.btn_cluster_start.pack(side='left', padx=5)
+        self.btn_cluster_restart = ctk.CTkButton(f_cluster_btns, text="🔄 Cluster Neustart", fg_color="#F57C00", hover_color="#E65100", width=150, state='disabled', command=self.cluster_restart)
+        self.btn_cluster_restart.pack(side='left', padx=5)
+        self.btn_cluster_stop = ctk.CTkButton(f_cluster_btns, text="⏹ Cluster Stopp", fg_color="#C62828", hover_color="#b71c1c", width=130, state='disabled', command=self.cluster_stop)
+        self.btn_cluster_stop.pack(side='left', padx=5)
+        
+        self.lbl_cluster_status = ctk.CTkLabel(f_cluster_btns, text="Cluster: Aus", text_color="#EF5350", font=("Arial", 14, "bold"))
+        self.lbl_cluster_status.pack(side='right', padx=20)
+
+        # Cluster Connection Settings
+        self.lbl_cl_conn = self.create_label(self.scroll_cluster, "Cluster Verbindung", True)
+
+        self.var_mainserverport = ctk.StringVar(value=self.settings.get("MainServerPort", "8781"))
+        self.lbl_cl_msp = self.create_entry_row(self.scroll_cluster, "Main Server Port:", self.var_mainserverport, width=100)
+
+        self.lbl_cl_msp_hint = ctk.CTkLabel(self.scroll_cluster, text="Dieser Port wird für die interne Kommunikation zwischen den Servern benutzt.\nEr muss ein freier Port sein, der nicht als Game/Query/Echo Port benutzt wird.", text_color="#AAAAAA", font=("Arial", 11), justify="left", wraplength=600)
+        self.lbl_cl_msp_hint.pack(anchor='w', padx=10, pady=(0, 5))
+
+        # Auto-enable KaiQiKuaFu button
+        f_kuafu = ctk.CTkFrame(self.scroll_cluster, fg_color="transparent")
+        f_kuafu.pack(fill='x', pady=5)
+        self.btn_enable_kuafu = ctk.CTkButton(f_kuafu, text="⚡ Cross-Server in GameXishu.json aktivieren", fg_color="#00695C", hover_color="#004D40", command=self._enable_kuafu)
+        self.btn_enable_kuafu.pack(side='left', padx=10)
+        self.lbl_kuafu_status = ctk.CTkLabel(f_kuafu, text="", font=("Arial", 12))
+        self.lbl_kuafu_status.pack(side='left', padx=10)
+
+        # DLC Server Settings
+        self.lbl_cl_title = self.create_label(self.scroll_cluster, "DLC Server Einstellungen", True)
+        
+        self.lbl_cl_desc = ctk.CTkLabel(self.scroll_cluster, text="Der DLC-Server (Wüste / Shifting Sands) wird automatisch mit der DLC-Map gestartet.\nDer Hauptserver nutzt die Main-Map.", text_color="#AAAAAA", font=("Arial", 12), justify="left", wraplength=600)
+        self.lbl_cl_desc.pack(anchor='w', padx=10, pady=(0, 10))
+
+        self.var_cl_servername = ctk.StringVar(value=self.settings.get("ClusterServerName", "My Soulmask DLC Server"))
+        self.lbl_cl_sn = self.create_entry_row(self.scroll_cluster, "DLC Server Name:", self.var_cl_servername)
+        
+        self.var_cl_password = ctk.StringVar(value=self.settings.get("ClusterServerPassword", ""))
+        self.lbl_cl_pw = self.create_entry_row(self.scroll_cluster, "DLC Passwort:", self.var_cl_password, True)
+        
+        self.var_cl_adminpassword = ctk.StringVar(value=self.settings.get("ClusterAdminPassword", "admin"))
+        self.lbl_cl_apw = self.create_entry_row(self.scroll_cluster, "DLC Admin PW:", self.var_cl_adminpassword)
+        
+        self.var_cl_maxplayers = ctk.StringVar(value=self.settings.get("ClusterMaxPlayers", "70"))
+        self.lbl_cl_mp = self.create_entry_row(self.scroll_cluster, "DLC Max. Spieler:", self.var_cl_maxplayers, width=80)
+
+        self.var_cl_backup = ctk.StringVar(value=self.settings.get("ClusterBackupIntervalMinutes", "120"))
+        self.lbl_cl_backup = self.create_entry_row(self.scroll_cluster, "DLC Backup (Min):", self.var_cl_backup, width=80)
+
+        self.lbl_cl_net = self.create_label(self.scroll_cluster, "DLC Server Ports", True)
+        
+        self.lbl_cl_port_warn = ctk.CTkLabel(self.scroll_cluster, text="⚠️ Die Ports müssen sich von den Hauptserver-Ports unterscheiden!", text_color="#FFA000", font=("Arial", 12))
+        self.lbl_cl_port_warn.pack(anchor='w', padx=10, pady=(0, 5))
+        
+        self.var_cl_gameport = ctk.StringVar(value=self.settings.get("ClusterGamePort", "8778"))
+        self.lbl_cl_gp = self.create_entry_row(self.scroll_cluster, "DLC Game Port:", self.var_cl_gameport, width=100)
+        self.var_cl_queryport = ctk.StringVar(value=self.settings.get("ClusterQueryPort", "27016"))
+        self.lbl_cl_qp = self.create_entry_row(self.scroll_cluster, "DLC Query Port:", self.var_cl_queryport, width=100)
+        self.var_cl_echoport = ctk.StringVar(value=self.settings.get("ClusterEchoPort", "18889"))
+        self.lbl_cl_ep = self.create_entry_row(self.scroll_cluster, "DLC Echo Port:", self.var_cl_echoport, width=100)
+
+        # DLC Console
+        self.lbl_cl_console_t = self.create_label(self.scroll_cluster, "DLC Server Konsole", True)
+        self.console_dlc = ctk.CTkTextbox(self.scroll_cluster, fg_color="#121212", text_color="#00BFFF", font=("Consolas", 13), height=200)
+        self.console_dlc.pack(fill='x', padx=10, pady=(0, 10))
+        self.console_dlc.configure(state='disabled')
+
+        # Trace all cluster vars
+        for v in [self.var_cl_servername, self.var_cl_password, self.var_cl_adminpassword, self.var_cl_maxplayers, self.var_cl_gameport, self.var_cl_queryport, self.var_cl_echoport, self.var_cl_backup, self.var_mainserverport]:
+            v.trace_add("write", lambda *args: self.save_settings())
+        self.var_cluster_enabled.trace_add("write", lambda *args: self.save_settings())
+
+        self._on_cluster_toggle()
+
+    def _enable_kuafu(self):
+        de = self.var_lang.get() == "Deutsch"
+        install_dir = self.var_install.get()
+        if not install_dir:
+            messagebox.showerror("Fehler" if de else "Error", "Bitte zuerst den Install-Ordner setzen!" if de else "Please set the install folder first!")
+            return
+        
+        json_path = os.path.join(install_dir, "WS", "Saved", "GameplaySettings", "GameXishu.json")
+        if not os.path.exists(json_path):
+            self.lbl_kuafu_status.configure(text="❌ GameXishu.json nicht gefunden! Server zuerst starten." if de else "❌ GameXishu.json not found! Start server first.", text_color="#EF5350")
+            return
+        
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            changed = False
+            for key in data:
+                if isinstance(data[key], dict) and "KaiQiKuaFu" in data[key]:
+                    if data[key]["KaiQiKuaFu"] != 1:
+                        data[key]["KaiQiKuaFu"] = 1
+                        changed = True
+            
+            if changed:
+                with open(json_path, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, indent=4, ensure_ascii=False)
+                self.lbl_kuafu_status.configure(text="✅ KaiQiKuaFu=1 gesetzt! Server neustarten." if de else "✅ KaiQiKuaFu=1 set! Restart server.", text_color="#69F0AE")
+                self.log("Cluster", "Cross-Server Modus in GameXishu.json aktiviert!", "Cluster", "Cross-Server mode enabled in GameXishu.json!")
+            else:
+                self.lbl_kuafu_status.configure(text="✅ Bereits aktiviert." if de else "✅ Already enabled.", text_color="#69F0AE")
+        except Exception as e:
+            self.lbl_kuafu_status.configure(text=f"❌ Fehler: {e}" if de else f"❌ Error: {e}", text_color="#EF5350")
+
+    def setup_info(self):
+        scroll_info = ctk.CTkScrollableFrame(self.tab_info, fg_color="transparent")
+        scroll_info.pack(expand=True, fill='both')
+
+        info_de = (
+            "═══════════════════════════════════════════\n"
+            "   SOULMASK SERVER MANAGER – ANLEITUNG\n"
+            "═══════════════════════════════════════════\n\n"
+
+            "━━━ 1. GRUNDLEGENDES SERVER SETUP ━━━\n\n"
+            "  1) SteamCMD herunterladen:\n"
+            "     → Dashboard → '📦 SteamCMD' Button klicken\n"
+            "     → Einen Ordner auswählen (z.B. C:\\SteamCMD)\n\n"
+            "  2) Server installieren:\n"
+            "     → Dashboard → '⏬ Server Install' Button klicken\n"
+            "     → Einen Ordner für den Server wählen\n"
+            "     → Map und Kampfmodus auswählen\n"
+            "     → Warten bis SteamCMD fertig ist\n\n"
+            "  3) Pfade setzen (falls nicht automatisch):\n"
+            "     → Einstellungen → 'Pfade' Bereich\n"
+            "     → '🪄 Pfade überall suchen' oder manuell setzen\n\n"
+            "  4) Server starten:\n"
+            "     → Dashboard → '▶ Start' Button\n"
+            "     → Warten bis Status 'Online' zeigt\n\n"
+
+            "━━━ 2. PORT FORWARDING ━━━\n\n"
+            "  Damit Freunde beitreten können:\n"
+            "  → Router-Einstellungen öffnen (meist 192.168.1.1)\n"
+            "  → Port Forwarding für UDP einrichten:\n"
+            "     • Game Port (Standard: 8777)\n"
+            "     • Query Port (Standard: 27015)\n"
+            "  → Nur UDP, NICHT TCP!\n\n"
+
+            "━━━ 3. CLUSTER SETUP (2 Maps) ━━━\n\n"
+            "  Ein Cluster = 2 Server auf einem PC:\n"
+            "  • Server 1: Regenwald (Main Map)\n"
+            "  • Server 2: Wüste (DLC Map / Shifting Sands)\n\n"
+
+            "  SCHRITT FÜR SCHRITT:\n\n"
+            "  1) Server mindestens 1x normal starten und\n"
+            "     wieder stoppen (damit GameXishu.json erstellt wird)\n\n"
+            "  2) Cluster Tab öffnen → 'Cluster Modus aktivieren' ✓\n\n"
+            "  3) '⚡ Cross-Server in GameXishu.json aktivieren'\n"
+            "     Button klicken → Setzt KaiQiKuaFu=1\n"
+            "     (Das aktiviert den Map-Wechsel im Spiel)\n\n"
+            "  4) Main Server Port setzen (Standard: 8781)\n"
+            "     → Muss ein freier Port sein!\n"
+            "     → NICHT der Game/Query/Echo Port!\n\n"
+            "  5) DLC Server Einstellungen konfigurieren:\n"
+            "     → Eigener Name für den DLC Server\n"
+            "     → Eigene Ports (MÜSSEN anders als Hauptserver sein!)\n"
+            "       Standard: Game 8778, Query 27016, Echo 18889\n\n"
+            "  6) 'Cluster Start' klicken\n"
+            "     → Startet automatisch BEIDE Server\n"
+            "     → Hauptserver zuerst, DLC Server nach 3 Sekunden\n\n"
+
+            "━━━ 4. WIE REISEN SPIELER ZWISCHEN MAPS? ━━━\n\n"
+            "  → Im Spiel gibt es ein Portal (Stargate) auf einer Insel\n"
+            "  → Dort können Spieler zwischen den Maps wechseln\n"
+            "  → WICHTIG: Der erste Charakter kann NICHT reisen!\n"
+            "     Man muss einen Stammesmitglied kontrollieren\n"
+            "  → Charakter-Fortschritt wird übertragen\n"
+            "  → Gebäude/Items bleiben auf ihrer jeweiligen Map\n"
+            "  → Alle Spieler brauchen das Shifting Sands DLC!\n\n"
+
+            "━━━ 5. WICHTIGE HINWEISE ━━━\n\n"
+            "  ⚠️ BACKUPS: Immer world.db sichern bevor\n"
+            "     Cluster-Einstellungen geändert werden!\n\n"
+            "  ⚠️ SERVER-IDs: Niemals die serverid ändern\n"
+            "     nachdem Spieler beigetreten sind!\n"
+            "     (Sonst verlieren sie ihren Fortschritt)\n\n"
+            "  ⚠️ PASSWÖRTER: Beide Server müssen das\n"
+            "     gleiche Join-Passwort verwenden!\n\n"
+            "  ⚠️ REIHENFOLGE: Hauptserver muss immer\n"
+            "     ZUERST gestartet werden! (Der Manager\n"
+            "     macht das automatisch bei 'Cluster Start')\n\n"
+            "  ⚠️ RAM: Jeder Server braucht ca. 8GB RAM.\n"
+            "     Für einen Cluster empfohlen: 16GB+ RAM\n\n"
+
+            "━━━ 6. PORTS ÜBERSICHT (Standard) ━━━\n\n"
+            "  Hauptserver (Regenwald):\n"
+            "     Game: 8777  |  Query: 27015  |  Echo: 18888\n\n"
+            "  DLC Server (Wüste):\n"
+            "     Game: 8778  |  Query: 27016  |  Echo: 18889\n\n"
+            "  Cluster Kommunikation:\n"
+            "     Main Server Port: 8781\n\n"
+            "  → Alle diese Ports im Router für UDP freigeben!\n"
+        )
+
+        info_en = (
+            "═══════════════════════════════════════════\n"
+            "   SOULMASK SERVER MANAGER – GUIDE\n"
+            "═══════════════════════════════════════════\n\n"
+
+            "━━━ 1. BASIC SERVER SETUP ━━━\n\n"
+            "  1) Download SteamCMD:\n"
+            "     → Dashboard → '📦 SteamCMD' button\n"
+            "     → Select a folder (e.g. C:\\SteamCMD)\n\n"
+            "  2) Install the server:\n"
+            "     → Dashboard → '⏬ Install Server' button\n"
+            "     → Choose a folder for the server\n"
+            "     → Select map and combat mode\n"
+            "     → Wait for SteamCMD to finish\n\n"
+            "  3) Set paths (if not automatic):\n"
+            "     → Settings → 'Paths' section\n"
+            "     → '🪄 Deep Auto-Detect' or set manually\n\n"
+            "  4) Start the server:\n"
+            "     → Dashboard → '▶ Start' button\n"
+            "     → Wait until status shows 'Online'\n\n"
+
+            "━━━ 2. PORT FORWARDING ━━━\n\n"
+            "  For friends to join:\n"
+            "  → Open your router settings (usually 192.168.1.1)\n"
+            "  → Set up Port Forwarding for UDP:\n"
+            "     • Game Port (default: 8777)\n"
+            "     • Query Port (default: 27015)\n"
+            "  → UDP only, NOT TCP!\n\n"
+
+            "━━━ 3. CLUSTER SETUP (2 Maps) ━━━\n\n"
+            "  A cluster = 2 servers on one PC:\n"
+            "  • Server 1: Cloud Mist Forest (Main Map)\n"
+            "  • Server 2: Shifting Sands (DLC Map)\n\n"
+
+            "  STEP BY STEP:\n\n"
+            "  1) Start the server normally at least once and\n"
+            "     stop it again (so GameXishu.json is created)\n\n"
+            "  2) Open Cluster tab → 'Enable Cluster Mode' ✓\n\n"
+            "  3) Click '⚡ Enable Cross-Server in GameXishu.json'\n"
+            "     → Sets KaiQiKuaFu=1\n"
+            "     (This enables map travel in the game)\n\n"
+            "  4) Set Main Server Port (default: 8781)\n"
+            "     → Must be a free port!\n"
+            "     → NOT the Game/Query/Echo Port!\n\n"
+            "  5) Configure DLC Server settings:\n"
+            "     → Separate name for the DLC server\n"
+            "     → Different ports (MUST differ from main server!)\n"
+            "       Default: Game 8778, Query 27016, Echo 18889\n\n"
+            "  6) Click 'Cluster Start'\n"
+            "     → Automatically starts BOTH servers\n"
+            "     → Main server first, DLC server after 3 seconds\n\n"
+
+            "━━━ 4. HOW DO PLAYERS TRAVEL BETWEEN MAPS? ━━━\n\n"
+            "  → There is a portal (Stargate) on an island in-game\n"
+            "  → Players can travel between maps there\n"
+            "  → IMPORTANT: The first character CANNOT travel!\n"
+            "     You must control a tribesman to use the portal\n"
+            "  → Character progression transfers between servers\n"
+            "  → Buildings/items stay on their respective map\n"
+            "  → All players need the Shifting Sands DLC!\n\n"
+
+            "━━━ 5. IMPORTANT NOTES ━━━\n\n"
+            "  ⚠️ BACKUPS: Always backup world.db before\n"
+            "     changing cluster settings!\n\n"
+            "  ⚠️ SERVER IDs: Never change the serverid\n"
+            "     after players have joined!\n"
+            "     (They would lose their progress)\n\n"
+            "  ⚠️ PASSWORDS: Both servers must use the\n"
+            "     same join password!\n\n"
+            "  ⚠️ ORDER: Main server must always start\n"
+            "     FIRST! (The Manager does this automatically\n"
+            "     when using 'Cluster Start')\n\n"
+            "  ⚠️ RAM: Each server needs ~8GB RAM.\n"
+            "     For a cluster recommended: 16GB+ RAM\n\n"
+
+            "━━━ 6. PORT OVERVIEW (Default) ━━━\n\n"
+            "  Main Server (Forest):\n"
+            "     Game: 8777  |  Query: 27015  |  Echo: 18888\n\n"
+            "  DLC Server (Shifting Sands):\n"
+            "     Game: 8778  |  Query: 27016  |  Echo: 18889\n\n"
+            "  Cluster Communication:\n"
+            "     Main Server Port: 8781\n\n"
+            "  → Forward all these ports in your router for UDP!\n"
+        )
+
+        de = self.var_lang.get() == "Deutsch"
+        self.info_textbox = ctk.CTkTextbox(scroll_info, fg_color="#1A1A1A", text_color="#E0E0E0", font=("Consolas", 13), height=700, wrap="word")
+        self.info_textbox.pack(fill='both', expand=True, padx=5, pady=5)
+        self.info_textbox.insert("0.0", info_de if de else info_en)
+        self.info_textbox.configure(state='disabled')
+        
+        self.info_text_de = info_de
+        self.info_text_en = info_en
+
+    def _on_cluster_toggle(self):
+        enabled = self.var_cluster_enabled.get()
+        de = self.var_lang.get() == "Deutsch"
+        state = "normal" if enabled else "disabled"
+        
+        if enabled:
+            self.lbl_cluster_info.configure(text="Cluster aktiv – Hauptserver = Main Map, DLC Server = Wüste" if de else "Cluster active – Main server = Forest, DLC server = Shifting Sands")
+            self.lbl_cluster_status.configure(text="Cluster: Bereit" if de else "Cluster: Ready", text_color="#FFA726")
+            if not self.server_process_dlc:
+                self.btn_cluster_start.configure(state='normal')
+        else:
+            self.lbl_cluster_info.configure(text="Cluster deaktiviert" if de else "Cluster disabled")
+            self.lbl_cluster_status.configure(text="Cluster: Aus" if de else "Cluster: Off", text_color="#EF5350")
+            self.btn_cluster_start.configure(state='disabled')
+            self.btn_cluster_restart.configure(state='disabled')
+            self.btn_cluster_stop.configure(state='disabled')
+        
+        self.save_settings()
+
+    def log_dlc(self, prefix_de, msg_de, prefix_en=None, msg_en=None):
+        try:
+            de = self.var_lang.get() == "Deutsch"
+        except:
+            de = False
+        prefix = prefix_de if de else (prefix_en if prefix_en else prefix_de)
+        msg = msg_de if de else (msg_en if msg_en else msg_de)
+        time_str = datetime.now().strftime('%H:%M:%S')
+        formatted = f"[{time_str}] [{prefix}] {msg}\n"
+        self.console_dlc.configure(state='normal')
+        self.console_dlc.insert("end", formatted)
+        self.console_dlc.see("end")
+        self.console_dlc.configure(state='disabled')
+
+    def cluster_start(self):
+        if not self.var_cluster_enabled.get():
+            return
+        de = self.var_lang.get() == "Deutsch"
+        
+        # Force main map for the main server
+        self.settings["MapName"] = "Level01_Main"
+        self.var_map_display.set(self.get_map_display_name("Level01_Main", de))
+        self.save_settings()
+        
+        # Start main server first
+        self.log("Cluster", "Starte Hauptserver (Main Map)...", "Cluster", "Starting main server (Main Map)...")
+        self.start_server()
+        
+        # Start DLC server after a short delay
+        self.after(3000, self._start_dlc_server)
+
+    def _start_dlc_server(self):
+        de = self.var_lang.get() == "Deutsch"
+        exe = self.var_exe.get()
+        if not os.path.exists(exe):
+            self.log_dlc("Fehler", "WSServer-Win64-Shipping.exe Pfad ungültig!", "Error", "WSServer-Win64-Shipping.exe path invalid!")
+            return
+
+        raw_name = self.var_cl_servername.get().strip()
+        if not raw_name.endswith("[RM]") and not raw_name.endswith(" RM"):
+            final_name = f"{raw_name} [RM]"
+        else:
+            final_name = raw_name
+
+        combat_mode = self.settings.get("CombatMode", "PvE").lower()
+
+        cmd_string = (
+            f'"{exe}" DLC_Level01_Main -server '
+            f'-Port={self.var_cl_gameport.get()} '
+            f'-QueryPort={self.var_cl_queryport.get()} '
+            f'-EchoPort={self.var_cl_echoport.get()} '
+            f'-SteamServerName="{final_name}" '
+            f'-MaxPlayers={self.var_cl_maxplayers.get()} '
+            f'-MULTIHOME=0.0.0.0 '
+            f'-forcepassthrough '
+            f'-{combat_mode} '
+            f'-UTF8Output'
+        )
+
+        pw = self.var_cl_password.get().strip()
+        if pw:
+            cmd_string += f' -PSW="{pw}" -ServerPassword="{pw}"'
+        admin_pw = self.var_cl_adminpassword.get().strip()
+        if admin_pw:
+            cmd_string += f' -adminpsw="{admin_pw}" -ServerAdminPassword="{admin_pw}"'
+
+        # Add cluster params for server travel (Child server = serverid 2)
+        main_port = self.var_mainserverport.get().strip()
+        cmd_string += f' -serverid=2'
+        cmd_string += f' -clientserverconnect=127.0.0.1:{main_port}'
+
+        try:
+            working_dir = os.path.dirname(exe)
+            creation_flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+
+            self.server_process_dlc = subprocess.Popen(
+                cmd_string,
+                cwd=working_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                creationflags=creation_flags
+            )
+            
+            self.lbl_cluster_status.configure(text="Cluster: Startet..." if de else "Cluster: Starting...", text_color="#FFA726")
+            self.btn_cluster_start.configure(state='disabled')
+            self.btn_cluster_restart.configure(state='normal')
+            self.btn_cluster_stop.configure(state='normal')
+            
+            self.log_dlc("System", "DLC Server-Prozess gestartet (Wüste / Shifting Sands)!", "System", "DLC Server process started (Shifting Sands)!")
+            self.log("Cluster", "DLC Server gestartet! Cluster ist nun aktiv.", "Cluster", "DLC Server started! Cluster is now active.")
+
+            threading.Thread(target=self._read_dlc_console_output, daemon=True).start()
+            threading.Thread(target=self._check_dlc_server_ready, daemon=True).start()
+            threading.Thread(target=self._dlc_backup_task, daemon=True).start()
+
+        except Exception as e:
+            self.log_dlc("Fehler", str(e), "Error", str(e))
+
+    def _read_dlc_console_output(self):
+        if not self.server_process_dlc or not self.server_process_dlc.stdout:
+            return
+        try:
+            for line in iter(self.server_process_dlc.stdout.readline, ''):
+                if line:
+                    self.after(0, lambda l=line: self._insert_dlc_console_raw(l))
+        except:
+            pass
+        self.after(0, lambda: self.log_dlc("System", "DLC Server-Prozess wurde beendet.", "System", "DLC Server process has been terminated."))
+
+    def _insert_dlc_console_raw(self, msg):
+        self.console_dlc.configure(state='normal')
+        self.console_dlc.insert("end", msg)
+        self.console_dlc.see("end")
+        self.console_dlc.configure(state='disabled')
+
+    def _check_dlc_server_ready(self):
+        try:
+            port = int(self.var_cl_queryport.get())
+        except:
+            self.after(0, lambda: self.lbl_cluster_status.configure(text="Cluster: Online", text_color="#69F0AE"))
+            return
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(2.0)
+        while self.server_process_dlc and self.server_process_dlc.poll() is None:
+            try:
+                sock.sendto(b'\xFF\xFF\xFF\xFFTSource Engine Query\x00', ("127.0.0.1", port))
+                data, _ = sock.recvfrom(4096)
+                if data:
+                    self.after(0, lambda: self.lbl_cluster_status.configure(text="Cluster: Online", text_color="#69F0AE"))
+                    self.after(0, lambda: self.log_dlc("System", "DLC Server ist bereit für Spieler!", "System", "DLC Server is ready for players!"))
+                    self.after(0, lambda: self.log("Cluster", "Beide Server sind online! Cluster vollständig aktiv.", "Cluster", "Both servers are online! Cluster fully active."))
+                    break
+            except socket.timeout:
+                pass
+            except:
+                pass
+            time.sleep(2)
+        sock.close()
+
+    def _dlc_backup_task(self):
+        while self.server_process_dlc and self.server_process_dlc.poll() is None:
+            try:
+                interval_minutes = int(self.var_cl_backup.get())
+            except ValueError:
+                interval_minutes = 120
+            if interval_minutes <= 0:
+                for _ in range(60):
+                    if not self.server_process_dlc or self.server_process_dlc.poll() is not None:
+                        return
+                    time.sleep(1)
+                continue
+            for _ in range(interval_minutes * 60):
+                if not self.server_process_dlc or self.server_process_dlc.poll() is not None:
+                    return
+                time.sleep(1)
+            if self.server_process_dlc and self.server_process_dlc.poll() is None:
+                self._trigger_dlc_save()
+
+    def _trigger_dlc_save(self):
+        self.after(0, lambda: self.log_dlc("Backup", "Starte DLC Server Backup...", "Backup", "Starting DLC Server backup..."))
+        try:
+            try: echo_port = int(self.var_cl_echoport.get())
+            except: echo_port = 18889
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(3.0)
+            sock.connect(("127.0.0.1", echo_port))
+            sock.sendall(b"saveworld 1\r\n")
+            sock.close()
+            self.after(0, lambda: self.log_dlc("Backup", "DLC Welt gespeichert.", "Backup", "DLC world saved."))
+        except Exception:
+            if self.server_process_dlc and self.server_process_dlc.poll() is None:
+                try:
+                    self.server_process_dlc.stdin.write("saveworld 1\r\n")
+                    self.server_process_dlc.stdin.flush()
+                except:
+                    pass
+
+    def cluster_stop(self):
+        if not self.server_process_dlc:
+            return
+        de = self.var_lang.get() == "Deutsch"
+        self.btn_cluster_stop.configure(state='disabled')
+        self.btn_cluster_restart.configure(state='disabled')
+        self.log("Cluster", "Fahre Cluster herunter...", "Cluster", "Shutting down cluster...")
+        self.log_dlc("System", "DLC Server wird heruntergefahren...", "System", "DLC Server shutting down...")
+
+        def dlc_shutdown():
+            try:
+                try: echo_port = int(self.var_cl_echoport.get())
+                except: echo_port = 18889
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(3.0)
+                try:
+                    sock.connect(("127.0.0.1", echo_port))
+                    sock.sendall(b"saveworld 1\r\n")
+                    time.sleep(5)
+                    sock.sendall(b"quit 5\r\n")
+                    sock.close()
+                except:
+                    if self.server_process_dlc and self.server_process_dlc.poll() is None:
+                        try:
+                            self.server_process_dlc.stdin.write("saveworld 1\r\n")
+                            self.server_process_dlc.stdin.flush()
+                            time.sleep(5)
+                            self.server_process_dlc.stdin.write("quit 5\r\n")
+                            self.server_process_dlc.stdin.flush()
+                        except:
+                            pass
+                for _ in range(20):
+                    if self.server_process_dlc.poll() is not None:
+                        break
+                    time.sleep(1)
+                if self.server_process_dlc.poll() is None:
+                    self.server_process_dlc.terminate()
+            except Exception as e:
+                try: self.server_process_dlc.terminate()
+                except: pass
+
+            self.server_process_dlc = None
+            # Also stop main server
+            self.after(0, self.stop_server)
+            self.after(0, self._finalize_cluster_stop_ui)
+
+        threading.Thread(target=dlc_shutdown, daemon=True).start()
+
+    def _finalize_cluster_stop_ui(self):
+        de = self.var_lang.get() == "Deutsch"
+        if self.var_cluster_enabled.get():
+            self.lbl_cluster_status.configure(text="Cluster: Bereit" if de else "Cluster: Ready", text_color="#FFA726")
+            self.btn_cluster_start.configure(state='normal')
+        else:
+            self.lbl_cluster_status.configure(text="Cluster: Aus" if de else "Cluster: Off", text_color="#EF5350")
+        self.btn_cluster_stop.configure(state='disabled')
+        self.btn_cluster_restart.configure(state='disabled')
+        self.log("Cluster", "Cluster vollständig heruntergefahren.", "Cluster", "Cluster fully shut down.")
+        self.log_dlc("System", "DLC Server gestoppt.", "System", "DLC Server stopped.")
+
+    def cluster_restart(self):
+        if not self.server_process_dlc:
+            return
+        self.log("Cluster", "Cluster Neustart eingeleitet...", "Cluster", "Cluster restart initiated...")
+        self.btn_cluster_restart.configure(state='disabled')
+        self.btn_cluster_stop.configure(state='disabled')
+
+        def do_restart():
+            # Stop DLC server
+            try:
+                try: echo_port = int(self.var_cl_echoport.get())
+                except: echo_port = 18889
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(3.0)
+                try:
+                    sock.connect(("127.0.0.1", echo_port))
+                    sock.sendall(b"saveworld 1\r\n")
+                    time.sleep(5)
+                    sock.sendall(b"quit 5\r\n")
+                    sock.close()
+                except:
+                    if self.server_process_dlc and self.server_process_dlc.poll() is None:
+                        try:
+                            self.server_process_dlc.stdin.write("quit 5\r\n")
+                            self.server_process_dlc.stdin.flush()
+                        except: pass
+                for _ in range(20):
+                    if self.server_process_dlc.poll() is not None:
+                        break
+                    time.sleep(1)
+                if self.server_process_dlc.poll() is None:
+                    self.server_process_dlc.terminate()
+            except:
+                try: self.server_process_dlc.terminate()
+                except: pass
+            self.server_process_dlc = None
+            self.after(0, lambda: self.log_dlc("System", "DLC Server gestoppt. Neustart...", "System", "DLC Server stopped. Restarting..."))
+
+            # Restart main server
+            self.after(0, self.restart_server)
+            # Restart DLC after delay
+            self.after(8000, self._start_dlc_server)
+
+        threading.Thread(target=do_restart, daemon=True).start()
+
     def create_label(self, parent, txt, bold=False):
         lbl = ctk.CTkLabel(parent, text=txt, font=("Arial", 16, "bold") if bold else ("Arial", 14))
         lbl.pack(anchor='w', padx=10, pady=(15, 5)); return lbl
@@ -397,6 +1023,12 @@ class SoulmaskManagerApp(ctk.CTk):
         admin_pw = self.var_adminpassword.get().strip()
         if admin_pw:
             cmd_string += f' -adminpsw="{admin_pw}" -ServerAdminPassword="{admin_pw}"'
+
+        # Add cluster params if cluster mode is enabled (Main server = serverid 1)
+        if hasattr(self, 'var_cluster_enabled') and self.var_cluster_enabled.get():
+            main_port = self.var_mainserverport.get().strip()
+            cmd_string += f' -serverid=1'
+            cmd_string += f' -mainserverport={main_port}'
 
         try:
             working_dir = os.path.dirname(exe)
@@ -1171,6 +1803,35 @@ class SoulmaskManagerApp(ctk.CTk):
             
         self.update_main_diff_options(update_diff_box=True)
 
+        # Cluster tab language
+        if hasattr(self, 'chk_cluster'):
+            self.chk_cluster.configure(text="Cluster Modus aktivieren" if de else "Enable Cluster Mode")
+            self.lbl_cl_conn.configure(text="Cluster Verbindung" if de else "Cluster Connection")
+            self.lbl_cl_msp.configure(text="Main Server Port:")
+            self.lbl_cl_msp_hint.configure(text="Dieser Port wird für die interne Kommunikation zwischen den Servern benutzt.\nEr muss ein freier Port sein, der nicht als Game/Query/Echo Port benutzt wird." if de else "This port is used for internal communication between servers.\nIt must be a free port not used as Game/Query/Echo Port.")
+            self.btn_enable_kuafu.configure(text="⚡ Cross-Server in GameXishu.json aktivieren" if de else "⚡ Enable Cross-Server in GameXishu.json")
+            self.lbl_cl_title.configure(text="DLC Server Einstellungen" if de else "DLC Server Settings")
+            self.lbl_cl_desc.configure(text="Der DLC-Server (Wüste / Shifting Sands) wird automatisch mit der DLC-Map gestartet.\nDer Hauptserver nutzt die Main-Map." if de else "The DLC server (Shifting Sands) is automatically started with the DLC map.\nThe main server uses the Forest map.")
+            self.lbl_cl_sn.configure(text="DLC Server Name:")
+            self.lbl_cl_pw.configure(text="DLC Passwort:" if de else "DLC Password:")
+            self.lbl_cl_apw.configure(text="DLC Admin PW:")
+            self.lbl_cl_mp.configure(text="DLC Max. Spieler:" if de else "DLC Max. Players:")
+            self.lbl_cl_backup.configure(text="DLC Backup (Min):")
+            self.lbl_cl_net.configure(text="DLC Server Ports")
+            self.lbl_cl_port_warn.configure(text="⚠️ Die Ports müssen sich von den Hauptserver-Ports unterscheiden!" if de else "⚠️ Ports must differ from main server ports!")
+            self.lbl_cl_console_t.configure(text="DLC Server Konsole" if de else "DLC Server Console")
+            self.btn_cluster_start.configure(text="▶ Cluster Start")
+            self.btn_cluster_restart.configure(text="🔄 Cluster Neustart" if de else "🔄 Cluster Restart")
+            self.btn_cluster_stop.configure(text="⏹ Cluster Stopp" if de else "⏹ Cluster Stop")
+            self._on_cluster_toggle()
+
+        # Info tab language
+        if hasattr(self, 'info_textbox'):
+            self.info_textbox.configure(state='normal')
+            self.info_textbox.delete("0.0", "end")
+            self.info_textbox.insert("0.0", self.info_text_de if de else self.info_text_en)
+            self.info_textbox.configure(state='disabled')
+
     def load_settings(self):
         if os.path.exists(self.config_file):
             try:
@@ -1192,6 +1853,19 @@ class SoulmaskManagerApp(ctk.CTk):
             "Difficulty": self.var_diff.get(),
             "BackupIntervalMinutes": self.var_backup_interval.get()
         })
+        if hasattr(self, 'var_cluster_enabled'):
+            self.settings.update({
+                "ClusterEnabled": self.var_cluster_enabled.get(),
+                "ClusterServerName": self.var_cl_servername.get(),
+                "ClusterServerPassword": self.var_cl_password.get(),
+                "ClusterAdminPassword": self.var_cl_adminpassword.get(),
+                "ClusterMaxPlayers": self.var_cl_maxplayers.get(),
+                "ClusterGamePort": self.var_cl_gameport.get(),
+                "ClusterQueryPort": self.var_cl_queryport.get(),
+                "ClusterEchoPort": self.var_cl_echoport.get(),
+                "ClusterBackupIntervalMinutes": self.var_cl_backup.get(),
+                "MainServerPort": self.var_mainserverport.get()
+            })
         try:
             with open(self.config_file, 'w') as f: json.dump(self.settings, f, indent=4)
         except: pass
